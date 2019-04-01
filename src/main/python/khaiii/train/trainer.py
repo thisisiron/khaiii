@@ -20,6 +20,10 @@ import os
 import pathlib
 import pprint
 from typing import List, Tuple
+import numpy as np
+
+from tensorflow.keras import backend as K
+
 
 from tensorboardX import SummaryWriter
 import torch
@@ -32,6 +36,7 @@ from khaiii.train.evaluator import Evaluator
 from khaiii.train.models import CnnModel
 from khaiii.resource.resource import Resource
 
+from khaiii.model.model import model, to_categorical
 
 #############
 # functions #
@@ -46,9 +51,12 @@ class Trainer:
             cfg:  config
         """
         self.cfg = cfg
+        # setter 설정
         setattr(cfg, 'model_id', self.model_id(cfg))
         setattr(cfg, 'out_dir', '{}/{}'.format(cfg.logdir, cfg.model_id))
         setattr(cfg, 'context_len', 2 * cfg.window + 1)
+        setattr(cfg, 'input_length', 64)
+        setattr(cfg, 'embedding_size', 128)
         self.rsc = Resource(cfg)
         self.model = CnnModel(cfg, self.rsc)
         self.optimizer = torch.optim.Adam(self.model.parameters(), cfg.learning_rate)
@@ -92,13 +100,15 @@ class Trainer:
         """
         load training dataset
         """
+        # self.cfg.in_pfx: corpus
         dataset_dev_path = '{}.dev'.format(self.cfg.in_pfx)
         self.dataset_dev = PosDataset(self.cfg, self.rsc.restore_dic,
                                       open(dataset_dev_path, 'r', encoding='UTF-8'))
         dataset_test_path = '{}.test'.format(self.cfg.in_pfx)
         self.dataset_test = PosDataset(self.cfg, self.rsc.restore_dic,
                                        open(dataset_test_path, 'r', encoding='UTF-8'))
-        dataset_train_path = '{}.train'.format(self.cfg.in_pfx)
+        # train -> dev로 잠시 변경
+        dataset_train_path = '{}.dev'.format(self.cfg.in_pfx)
         self.dataset_train = PosDataset(self.cfg, self.rsc.restore_dic,
                                         open(dataset_train_path, 'r', encoding='UTF-8'))
 
@@ -169,41 +179,53 @@ class Trainer:
                      self.loss_trains[best_idx], self.loss_devs[best_idx], self.acc_chars[best_idx],
                      self.acc_words[best_idx], self.f_scores[best_idx], self.learning_rates[-1])
 
+#    def train(self):
+#        """
+#        train model with dataset
+#        """
+#        self._restore_prev_train()
+#        logging.info('config: %s', pprint.pformat(self.cfg.__dict__))
+#
+#        train_begin = datetime.now()
+#        logging.info('{{{{ training begin: %s {{{{', self._dt_str(train_begin))
+#        if torch.cuda.is_available():
+#            self.model.cuda()
+#        pathlib.Path(self.cfg.out_dir).mkdir(parents=True, exist_ok=True)
+#        self.log_file = open('{}/log.tsv'.format(self.cfg.out_dir), 'at')
+#        self.sum_wrt = SummaryWriter(self.cfg.out_dir)
+#        patience = self.cfg.patience
+#        for _ in range(1000000):
+#            is_best = self._train_epoch()
+#            if is_best:
+#                patience = self.cfg.patience
+#                continue
+#            if patience <= 0:
+#                break
+#            self._revert_to_best(True)
+#            patience -= 1
+#            logging.info('==== revert to EPOCH[%d], f-score: %.4f, patience: %d ====',
+#                         self.cfg.best_epoch, max(self.f_scores), patience)
+#
+#        train_end = datetime.now()
+#        train_elapsed = self._elapsed(train_end - train_begin)
+#        logging.info('}}}} training end: %s, elapsed: %s, epoch: %s }}}}',
+#                     self._dt_str(train_end), train_elapsed, self.cfg.epoch)
+#
+#        avg_loss, acc_char, acc_word, f_score = self.evaluate(False)
+#        logging.info('==== test loss: %.4f, char acc: %.4f, word acc: %.4f, f-score: %.4f ====',
+#                     avg_loss, acc_char, acc_word, f_score)
+
     def train(self):
         """
         train model with dataset
         """
-        self._restore_prev_train()
-        logging.info('config: %s', pprint.pformat(self.cfg.__dict__))
 
         train_begin = datetime.now()
         logging.info('{{{{ training begin: %s {{{{', self._dt_str(train_begin))
-        if torch.cuda.is_available():
-            self.model.cuda()
-        pathlib.Path(self.cfg.out_dir).mkdir(parents=True, exist_ok=True)
-        self.log_file = open('{}/log.tsv'.format(self.cfg.out_dir), 'at')
-        self.sum_wrt = SummaryWriter(self.cfg.out_dir)
-        patience = self.cfg.patience
-        for _ in range(1000000):
-            is_best = self._train_epoch()
-            if is_best:
-                patience = self.cfg.patience
-                continue
-            if patience <= 0:
-                break
-            self._revert_to_best(True)
-            patience -= 1
-            logging.info('==== revert to EPOCH[%d], f-score: %.4f, patience: %d ====',
-                         self.cfg.best_epoch, max(self.f_scores), patience)
 
-        train_end = datetime.now()
-        train_elapsed = self._elapsed(train_end - train_begin)
-        logging.info('}}}} training end: %s, elapsed: %s, epoch: %s }}}}',
-                     self._dt_str(train_end), train_elapsed, self.cfg.epoch)
+        is_best = self._train_epoch()
 
-        avg_loss, acc_char, acc_word, f_score = self.evaluate(False)
-        logging.info('==== test loss: %.4f, char acc: %.4f, word acc: %.4f, f-score: %.4f ====',
-                     avg_loss, acc_char, acc_word, f_score)
+
 
     def _revert_to_best(self, is_decay_lr: bool):
         """
@@ -216,42 +238,138 @@ class Trainer:
             self.cfg.learning_rate *= self.cfg.lr_decay
         self._load_optim('{}/optim.state'.format(self.cfg.out_dir), self.cfg.learning_rate)
 
+#    def _train_epoch(self) -> bool:
+#        """
+#        한 epoch을 학습한다. 배치 단위는 글자 단위
+#        Returns:
+#            현재 epoch이 best 성능을 나타냈는 지 여부
+#        """
+#        batches = []
+#        loss_trains = []
+#        for train_sent in tqdm(self.dataset_train, 'EPOCH[{}]'.format(self.cfg.epoch),
+#                               len(self.dataset_train), mininterval=1, ncols=100):
+#            train_labels, train_contexts = train_sent.to_tensor(self.cfg, self.rsc, True)
+#            # train_labels example
+#            # train_labels tensor([ 66,  66,  65,  65,  19, 455,  47,  70])
+#            # train_contexts example
+#            # train_contexts tensor([[   3,    3,    1, 4120,   16,    2, 4107],
+#            #                        [   3,    1, 4120,   16,    2, 4107, 4154],
+#            #                                   ...                           ]]
+#            if torch.cuda.is_available():
+#                train_labels = train_labels.cuda()
+#                train_contexts = train_contexts.cuda()
+#
+#            self.model.train()
+#            train_outputs = self.model(train_contexts)
+#            # train_outputs
+#            # train_outputs tensor([[ -5.3844,  -6.7708,  -5.4285,  ..., -5.7549,  -6.3682,  -6.1841],
+#            #                       [ -3.1936,  -4.0748,  -2.7327,  ...,  -3.7389,  -3.7714, -4.1734],
+#            #                       [ ...                                                           ]]
+#            batches.append((train_labels, train_outputs))
+#            if sum([batch[0].size(0) for batch in batches]) < self.cfg.batch_size:
+#                continue
+#
+#            batch_label = torch.cat([x[0] for x in batches], 0)    # pylint: disable=no-member
+#            batch_output = torch.cat([x[1] for x in batches], 0)    # pylint: disable=no-member
+#            batches = []
+#
+#            batch_output.requires_grad_()
+#            loss_train = self.criterion(batch_output, batch_label)
+#            loss_trains.append(loss_train.item())
+#            loss_train.backward()
+#            self.optimizer.step()
+#            self.optimizer.zero_grad()
+#
+#        avg_loss_dev, acc_char, acc_word, f_score = self.evaluate(True)
+#        is_best = self._check_epoch(loss_trains, avg_loss_dev, acc_char, acc_word, f_score)
+#        self.cfg.epoch += 1
+#        return is_best
+
+
     def _train_epoch(self) -> bool:
         """
         한 epoch을 학습한다. 배치 단위는 글자 단위
         Returns:
             현재 epoch이 best 성능을 나타냈는 지 여부
         """
-        batches = []
-        loss_trains = []
-        for train_sent in tqdm(self.dataset_train, 'EPOCH[{}]'.format(self.cfg.epoch),
-                               len(self.dataset_train), mininterval=1, ncols=100):
-            train_labels, train_contexts = train_sent.to_tensor(self.cfg, self.rsc, True)
-            if torch.cuda.is_available():
-                train_labels = train_labels.cuda()
-                train_contexts = train_contexts.cuda()
+        batch_size = 100
+        STEP_SIZE_TRAIN = len(self.dataset_train.sents)//batch_size
+        STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//batch_size 
+        self.nn_model = model(self.cfg, self.rsc)
 
-            self.model.train()
-            train_outputs = self.model(train_contexts)
-            batches.append((train_labels, train_outputs))
-            if sum([batch[0].size(0) for batch in batches]) < self.cfg.batch_size:
-                continue
+        gen = self.dataGenerator(batch_size) 
+        val_gen = self.dataGenerator(batch_size, mode='dev')
+        test_gen = self.dataGenerator(100,mode='test')
 
-            batch_label = torch.cat([x[0] for x in batches], 0)    # pylint: disable=no-member
-            batch_output = torch.cat([x[1] for x in batches], 0)    # pylint: disable=no-member
-            batches = []
+        print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev), ' test:', len(self.dataset_test))
 
-            batch_output.requires_grad_()
-            loss_train = self.criterion(batch_output, batch_label)
-            loss_trains.append(loss_train.item())
-            loss_train.backward()
-            self.optimizer.step()
-            self.optimizer.zero_grad()
+        self.nn_model.fit_generator(gen, 
+                                    steps_per_epoch= STEP_SIZE_TRAIN, 
+                                    epochs=3, 
+                                    verbose=1, 
+                                    validation_data = val_gen,
+                                    validation_steps = STEP_SIZE_VALIDATION
+                                   )
+        
 
-        avg_loss_dev, acc_char, acc_word, f_score = self.evaluate(True)
-        is_best = self._check_epoch(loss_trains, avg_loss_dev, acc_char, acc_word, f_score)
-        self.cfg.epoch += 1
+#        output = self.nn_model.predict_generator(test_gen,
+#                                        steps=50,
+#                                        verbose=1
+#                                       )
+#        for x,z in zip(np.argmax(output, axis=-1), self.dataset_test.sents):
+#            print(z)
+#            for y in x:
+#                print(self.rsc.vocab_out[int(y)], end=' ')
+#            print()
+
+        for sent in tqdm(self.dataset_test):
+            test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
+            output = self.nn_model.predict(np.array([test_contexts_tensor]))
+            predicts = np.argmax(output, axis=-1)
+            predicts = np.squeeze(predicts, axis=0)
+            pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts]
+            pred_sent = copy.deepcopy(sent)
+            #print(pred_tags)
+            print(pred_sent.texts)
+            pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
+            self.evaler.count(sent, pred_sent)
+
+        print(self.evaler.evaluate())
+
+
+
+        is_best = 5
         return is_best
+
+    def _prepare_train_data(self, mode='train'):
+        if mode=='train':
+            dataset = self.dataset_train
+        elif mode=='dev':
+            dataset = self.dataset_dev
+        elif mode=='test':
+            dataset = self.dataset_test
+
+        labels_bundle = []
+        contexts_bundle = []
+        for train_sent in tqdm(dataset):
+            labels_tensor, contexts_tensor = train_sent._pad_sequence(self.cfg, self.rsc)
+            labels_bundle.append(labels_tensor)
+            contexts_bundle.append(contexts_tensor)
+        return np.array(labels_bundle), np.array(contexts_bundle)
+
+
+    def dataGenerator(self, batch_size=128, mode='train'):
+        y_data, x_data = self._prepare_train_data(mode)
+        while True:
+            total_sample = x_data.shape[0]
+            batches = total_sample // batch_size
+            if total_sample % batch_size > 0:
+                batches+=1
+            for batch in range(batches):
+                section = slice(batch*batch_size, (batch+1)*batch_size)
+                y_data_onehot = to_categorical(y_data[section], len(self.rsc.vocab_out.dic))
+                yield(x_data[section], y_data_onehot)
+
 
     def _check_epoch(self, loss_trains: List[float], avg_loss_dev: float, acc_char: float,
                      acc_word: float, f_score: float) -> bool:
@@ -331,6 +449,40 @@ class Trainer:
         self.optimizer.load_state_dict(state_dict)
         self.optimizer.param_groups[0]['lr'] = learning_rate
 
+#    def evaluate(self, is_dev: bool) -> tuple[float, float, float, float]:
+#        """
+#        evaluate f-score
+#        args:
+#            is_dev:  whether evaluate on dev set or not
+#        returns:
+#            average dev loss
+#            character accuracy
+#            word accuracy
+#            f-score
+#        """
+#        dataset = self.dataset_dev if is_dev else self.dataset_test
+#        self.model.eval()
+#        losses = []
+#        for sent in dataset:
+#            # 만약 spc_dropout이 1.0 이상이면 공백을 전혀 쓰지 않는 것이므로 평가 시에도 적용한다.
+#            labels, contexts = sent.to_tensor(self.cfg, self.rsc, self.cfg.spc_dropout >= 1.0)
+#            if torch.cuda.is_available():
+#                labels = labels.cuda()
+#                contexts = contexts.cuda()
+#            outputs = self.model(contexts)
+#            loss = self.criterion(outputs, labels)
+#            losses.append(loss.item())
+#            _, predicts = f.softmax(outputs, dim=1).max(1)
+#            print('predicts', predicts)
+#            pred_tags = [self.rsc.vocab_out[t.item()] for t in predicts]
+#            print('pred_tags', pred_tags)
+#            pred_sent = copy.deepcopy(sent)
+#            pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
+#            self.evaler.count(sent, pred_sent)
+#        avg_loss = sum(losses) / len(losses)
+#        return (avg_loss, ) + self.evaler.evaluate()
+
+
     def evaluate(self, is_dev: bool) -> Tuple[float, float, float, float]:
         """
         evaluate f-score
@@ -342,22 +494,15 @@ class Trainer:
             word accuracy
             f-score
         """
-        dataset = self.dataset_dev if is_dev else self.dataset_test
-        self.model.eval()
-        losses = []
-        for sent in dataset:
-            # 만약 spc_dropout이 1.0 이상이면 공백을 전혀 쓰지 않는 것이므로 평가 시에도 적용한다.
-            labels, contexts = sent.to_tensor(self.cfg, self.rsc, self.cfg.spc_dropout >= 1.0)
-            if torch.cuda.is_available():
-                labels = labels.cuda()
-                contexts = contexts.cuda()
-            outputs = self.model(contexts)
-            loss = self.criterion(outputs, labels)
-            losses.append(loss.item())
-            _, predicts = F.softmax(outputs, dim=1).max(1)
-            pred_tags = [self.rsc.vocab_out[t.item()] for t in predicts]
-            pred_sent = copy.deepcopy(sent)
-            pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
-            self.evaler.count(sent, pred_sent)
-        avg_loss = sum(losses) / len(losses)
-        return (avg_loss, ) + self.evaler.evaluate()
+        if is_dev:
+            mode = 'dev'
+        else: 
+            mode = 'test'
+        batch_size = 128
+        gen = self.dataGenerator(batch_size, mode) 
+        score = self.nn_model.evaluate_generator(gen, steps=len(self.dataset_dev.sents)//batch_size, verbose=1)
+        print('score:', score)
+        print('output:', self.nn_model.outputs)
+        
+
+

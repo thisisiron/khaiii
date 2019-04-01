@@ -114,3 +114,4 @@ class Evaluator:
         f_score = 2.0 * recall * precision / (recall + precision)
         print('f-score / (recall, precision): %.4f / (%.4f, %.4f)' % (f_score, recall, precision),
               file=fout)
+

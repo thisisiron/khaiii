@@ -16,6 +16,7 @@ import re
 
 from typing import List, Tuple
 
+MAX_LEN = 64
 
 #########
 # types #
@@ -36,6 +37,21 @@ class PosMorph:
     morpheme
     """
     def __init__(self, morph: str, pos_tag: str = 'O', beg: int = -1, end: int = -1):
+        '''
+        각 음절마다 'O' Tag와 begin과 end 초기화
+        Args:
+            morph: 음절
+        Example:
+            morph 저  pos_tag NP  beg 0  end 1
+            morph 는  pos_tag JX  beg 1  end 2
+            morph 일  pos_tag NNG  beg 0  end 1
+            morph 아  pos_tag NNG  beg 0  end 1
+            morph 을  pos_tag JKO  beg 2  end 3
+            morph 사  pos_tag NNG  beg 0  end 1
+            morph 합  pos_tag XSV  beg 2  end 3
+            morph 니  pos_tag EF  beg 3  end 4
+            morph .  pos_tag SF  beg 5  end 6
+        '''
         self.morph = morph
         self.pos_tag = pos_tag
         self.beg = beg
@@ -60,8 +76,6 @@ class PosWord:
         self.raw = raw
         self.tags = []    # output tags for each character
         self.res_chrs = raw    # 원형 복원된 형태소들의 음절들을 합친 것
-        self.res_tags = []    # 원형 복원된 형태소 음절들의 음절별 태그 (IOB)
-        self.pos_tagged_morphs = [PosMorph(x, 'O', idx, idx+1) for idx, x in enumerate(raw)]
 
     def __str__(self):
         return '{}\t{}'.format(self.raw, ' '.join([str(x) for x in self.pos_tagged_morphs]))
@@ -122,7 +136,15 @@ class PosWord:
         if not restore_dic:
             tags = [x.split(':', 1)[0] for x in tags]
         self.tags = tags
-        assert len(self.raw) == len(self.tags)    # 음절수와 태그수는 동일해야 한다.
+        
+#        print(self.raw)
+#        print(len(self.raw))
+#        print(self.tags)
+#        print(len(self.tags))
+        
+
+
+#        assert len(self.raw) == len(self.tags)    # 음절수와 태그수는 동일해야 한다.
         self.pos_tagged_morphs = self._make_pos_morphs(restore_dic)
 
     def _make_pos_morphs(self, restore_dic: dict = None):
@@ -130,6 +152,8 @@ class PosWord:
         형태소 태그리스트를 대상으로 B/I 로 병합되는 위치를 구합니다.
         Args:
             restore_dic:  원형 복원 사전
+        Returns:
+            pos_morphs: 단어/Tag을 담은 List  Ex. 기억/NNG
         """
         if not self.tags:
             return []
@@ -224,6 +248,8 @@ class PosSentence(Sentence):
         Sentence 객체의 'words' 멤버를 PosWords 객체의 raw를 이용하여 채운다.
         """
         self.words = [pos_word.raw for pos_word in self.pos_tagged_words]
+        # Example:
+        #    words: ['저는', '일요일', '아침을', '사랑합니다.']
 
     def init_pos_tags(self):
         """
@@ -232,7 +258,9 @@ class PosSentence(Sentence):
         if self.pos_tagged_words:
             raise RuntimeError('PoS tagged words are already initialized')
         for word in self.words:
+            # 각word를 PosWord Class에게 전달
             self.pos_tagged_words.append(PosWord(word))
+            print('pos_tagged_words', self.pos_tagged_words)
 
     def set_pos_result(self, tags: List[str], restore_dic: dict = None):
         """
@@ -246,6 +274,10 @@ class PosSentence(Sentence):
             pos_word.set_pos_result(tags[total_char_num:total_char_num + len(pos_word.raw)],
                                     restore_dic)
             total_char_num += len(pos_word.raw)
+        
+        # PAD한 char만큼 길이 변경 
+        total_char_num = len(tags) 
+
         assert total_char_num == len(tags)
 
     def get_sequence(self, morph: bool = True, tag: bool = True, simple: bool = False) -> List[str]:

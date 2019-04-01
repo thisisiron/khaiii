@@ -24,12 +24,12 @@ from khaiii.resource.vocabulary import Vocabulary
 # constants #
 #############
 SPECIAL_CHARS = [
+    '<w>',    # white space 
     '<u>',    # unknown character
-    '<w>', '</w>',    # begin/end of word
-    '<s>', '</s>'    # begin/end of sentence
+    '<cls>', '<sep>'    # begin/end of sentence
 ]
 
-PAD_CHR = '<p>'    # sepcial character for padding
+PAD_CHR = 'I-PAD'    # sepcial character for padding
 
 
 #########
@@ -47,7 +47,7 @@ class Resource:
         vocab_in_path = '{}/vocab.in'.format(cfg.rsc_src)
         self.vocab_in = Vocabulary(vocab_in_path, cfg.cutoff, SPECIAL_CHARS)
         vocab_out_path = '{}/vocab.out'.format(cfg.rsc_src)
-        self.vocab_out = Vocabulary(vocab_out_path, 0, None)
+        self.vocab_out = Vocabulary(vocab_out_path, 0, [PAD_CHR])
         restore_dic_path = '{}/restore.dic'.format(cfg.rsc_src)
         self.restore_dic = self._load_restore_dic(restore_dic_path)
 

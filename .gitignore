@@ -1,2 +1,6 @@
 build/
+.idea/
 __pycache__/
+
+train/corpus*
+train/*

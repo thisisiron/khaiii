@@ -33,6 +33,7 @@ class PosSentTensor(PosSentence):
     """
     def __init__(self, raw_sent: str = ''):
         super().__init__(raw_sent)
+        self.texts = []
         if raw_sent:
             self.init_pos_tags()
 
@@ -100,6 +101,53 @@ class PosSentTensor(PosSentence):
                 assert len(right_context) == window
                 contexts.append(left_context + [char, ] + right_context)
         return contexts
+
+    def _pad_sequence(self, cfg: Namespace, rsc: Resource):
+        import tensorflow as tf
+        from tensorflow.keras.preprocessing.text import Tokenizer
+        from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+        token_in = Tokenizer(num_words=len(rsc.vocab_in.dic)+1,filters='')
+        token_in.word_index = rsc.vocab_in.dic
+        texts = [] 
+        texts.append('<cls>') 
+        for char in ' '.join(self.words):
+            if char in rsc.vocab_in.dic:
+                texts.append(char)
+            elif char==' ':
+                texts.append('<w>')
+            else:
+                texts.append('<u>')
+        texts.append('<sep>')
+        #print('texts:', texts)
+        texts = token_in.texts_to_sequences([' '.join(texts)]) 
+        pad_texts = pad_sequences(texts, maxlen=cfg.input_length, padding='post')
+        #print('pad_texts:', pad_texts)
+
+        #------------------labels------------------------------------#
+        
+        token_out = Tokenizer(num_words=len(rsc.vocab_out.dic)+1, filters='', lower=False)
+        token_out.word_index = rsc.vocab_out.dic
+
+        labels = []
+
+        labels = [PAD_CHR, ]    # 문장 시작
+
+        for pos_word in self.pos_tagged_words:
+            if len(labels) > 1:
+                labels.append(PAD_CHR)    # 어절 경계
+            labels.extend(pos_word.tags)
+        labels.append(PAD_CHR)    # 문장 종료
+
+        #print('before:', labels)
+        labels = token_out.texts_to_sequences([' '.join(labels)])
+        pad_lables = pad_sequences(labels, maxlen=cfg.input_length, padding='post')
+        #print(pad_lables)
+
+        assert len(pad_lables) == len(pad_texts)
+
+        return pad_lables[0], pad_texts[0]
+
 
     def to_tensor(self, cfg: Namespace, rsc: Resource, is_train: bool) -> Tuple[Tensor, Tensor]:
         """
@@ -175,7 +223,7 @@ class PosDataset:
                     self.sents.append(sent)
                 sent = PosSentTensor()
                 continue
-            raw, tags = line.split('\t')
+            raw, tags = line.split('\t') # Ex. raw: 정당성의 tags: I-XR I-XR I-XSN I-JKG
             pos_word = PosWord(raw)
             pos_word.set_pos_result(tags.split(), restore_dic)
             sent.pos_tagged_words.append(pos_word)
@@ -194,3 +242,4 @@ class PosDataset:
 
     def __len__(self):
         return len(self.sents)
+
