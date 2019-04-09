@@ -22,7 +22,10 @@ import pprint
 from typing import List, Tuple
 import numpy as np
 
+import tensorflow as tf
+from tensorflow import keras
 from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 
 
 from tensorboardX import SummaryWriter
@@ -58,8 +61,12 @@ class Trainer:
         setattr(cfg, 'input_length', 64)
         setattr(cfg, 'embedding_size', 128)
         self.rsc = Resource(cfg)
-        self.model = CnnModel(cfg, self.rsc)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), cfg.learning_rate)
+        #self.model = CnnModel(cfg, self.rsc)
+        self.model = model(self.cfg, self.rsc)
+        if os.path.isfile(cfg.model_path) and cfg.mode=='test': 
+            self._load_model(cfg.model_path)
+
+        #self.optimizer = torch.optim.Adam(self.model.parameters(), cfg.learning_rate)
         self.criterion = nn.CrossEntropyLoss()
         self.evaler = Evaluator()
         self._load_dataset()
@@ -223,20 +230,20 @@ class Trainer:
         train_begin = datetime.now()
         logging.info('{{{{ training begin: %s {{{{', self._dt_str(train_begin))
 
-        is_best = self._train_epoch()
+        self._train_epoch()
 
 
 
-    def _revert_to_best(self, is_decay_lr: bool):
-        """
-        이전 best 모델로 되돌린다.
-        Args:
-            is_decay_lr:  whether multiply decay factor or not
-        """
-        self.model.load('{}/model.state'.format(self.cfg.out_dir))
-        if is_decay_lr:
-            self.cfg.learning_rate *= self.cfg.lr_decay
-        self._load_optim('{}/optim.state'.format(self.cfg.out_dir), self.cfg.learning_rate)
+#    def _revert_to_best(self, is_decay_lr: bool):
+#        """
+#        이전 best 모델로 되돌린다.
+#        Args:
+#            is_decay_lr:  whether multiply decay factor or not
+#        """
+#        self.model.load('{}/model.state'.format(self.cfg.out_dir))
+#        if is_decay_lr:
+#            self.cfg.learning_rate *= self.cfg.lr_decay
+#        self._load_optim('{}/optim.state'.format(self.cfg.out_dir), self.cfg.learning_rate)
 
 #    def _train_epoch(self) -> bool:
 #        """
@@ -285,63 +292,66 @@ class Trainer:
 #        self.cfg.epoch += 1
 #        return is_best
 
+    def _set_callback_fn(self):
+
+        MODEL_SAVE_FOLDER_PATH = '../src/main/python/khaiii/train/weights/'
+        if not os.path.exists(MODEL_SAVE_FOLDER_PATH):
+              os.mkdir(MODEL_SAVE_FOLDER_PATH)
+
+        filepath = MODEL_SAVE_FOLDER_PATH + "weights-{epoch:02d}-{loss:.4f}.h5"
+        checkpoint = ModelCheckpoint(filepath, verbose=1, save_best_only=True, mode='min', save_weights_only=True)
+        cb_early_stopping = EarlyStopping(monitor='loss', patience=1) 
+
+        self.callbacks_list = [cb_early_stopping,checkpoint]
+
 
     def _train_epoch(self) -> bool:
-        """
-        한 epoch을 학습한다. 배치 단위는 글자 단위
-        Returns:
-            현재 epoch이 best 성능을 나타냈는 지 여부
-        """
-        batch_size = 100
-        STEP_SIZE_TRAIN = len(self.dataset_train.sents)//batch_size
-        STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//batch_size 
-        self.nn_model = model(self.cfg, self.rsc)
 
-        gen = self.dataGenerator(batch_size) 
-        val_gen = self.dataGenerator(batch_size, mode='dev')
-        test_gen = self.dataGenerator(100,mode='test')
+        if self.cfg.mode == 'train':
+            print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev))
+            
+            STEP_SIZE_TRAIN = len(self.dataset_train.sents)//self.cfg.batch_size
+            STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//self.cfg.batch_size 
+            
+            gen = self.dataGenerator(self.cfg.batch_size, mode='train') 
+            val_gen = self.dataGenerator(self.cfg.batch_size, mode='dev')
 
-        print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev), ' test:', len(self.dataset_test))
+            self._set_callback_fn()
 
-        self.nn_model.fit_generator(gen, 
-                                    steps_per_epoch= STEP_SIZE_TRAIN, 
-                                    epochs=3, 
-                                    verbose=1, 
-                                    validation_data = val_gen,
-                                    validation_steps = STEP_SIZE_VALIDATION
-                                   )
-        
-
-#        output = self.nn_model.predict_generator(test_gen,
-#                                        steps=50,
-#                                        verbose=1
-#                                       )
-#        for x,z in zip(np.argmax(output, axis=-1), self.dataset_test.sents):
-#            print(z)
-#            for y in x:
-#                print(self.rsc.vocab_out[int(y)], end=' ')
-#            print()
-
-        for sent in tqdm(self.dataset_test):
-            test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
-            output = self.nn_model.predict(np.array([test_contexts_tensor]))
-            predicts = np.argmax(output, axis=-1)
-            predicts = np.squeeze(predicts, axis=0)
-            pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts]
-            pred_sent = copy.deepcopy(sent)
-            #print(pred_tags)
-            print(pred_sent.texts)
-            pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
-            self.evaler.count(sent, pred_sent)
-
-        print(self.evaler.evaluate())
+            self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            self.model.summary()
 
 
 
-        is_best = 5
-        return is_best
+            self.model.fit_generator(gen, 
+                                        steps_per_epoch= STEP_SIZE_TRAIN, 
+                                        epochs=100,
+                                        validation_data = val_gen,
+                                        validation_steps = STEP_SIZE_VALIDATION,
+                                        verbose=1, 
+                                        callbacks=self.callbacks_list
+                                       )
 
-    def _prepare_train_data(self, mode='train'):
+
+        elif self.cfg.mode == 'test':
+            print('test set size:', len(self.dataset_test))
+            test_gen = self.dataGenerator(100, mode='test')
+
+            for sent in tqdm(self.dataset_test):
+                test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
+                output = self.model.predict(np.array([test_contexts_tensor]))
+                predicts = np.argmax(output, axis=-1)
+                predicts = np.squeeze(predicts, axis=0)
+                pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts if val!=0]
+                pred_sent = copy.deepcopy(sent)
+                print(pred_sent.words)
+                pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
+                self.evaler.count(sent, pred_sent)
+
+            print(self.evaler.evaluate())
+
+
+    def _prepare_data(self, mode='train'):
         if mode=='train':
             dataset = self.dataset_train
         elif mode=='dev':
@@ -357,14 +367,29 @@ class Trainer:
             contexts_bundle.append(contexts_tensor)
         return np.array(labels_bundle), np.array(contexts_bundle)
 
+    def _generate_data(self, mode='train'):
 
+        def map_fn(context, label):
+            y_data_onehot = tf.one_hot(label, len(self.rsc.vocab_out.dic))
+            return context, y_data_onehot
+
+        labels, contexts = self._prepare_data(mode)
+        dataset = tf.data.Dataset.from_tensor_slices((contexts, labels))
+
+        dataset = dataset.map(map_fn)
+        dataset = dataset.batch(30)
+        dataset = dataset.repeat()
+        iterator = dataset.make_one_shot_iterator()
+
+        return iterator.get_next() 
+        
     def dataGenerator(self, batch_size=128, mode='train'):
-        y_data, x_data = self._prepare_train_data(mode)
+        y_data, x_data = self._prepare_data(mode)
+        total_sample = x_data.shape[0]
+        batches = total_sample // batch_size
+        if total_sample % batch_size > 0:
+            batches+=1
         while True:
-            total_sample = x_data.shape[0]
-            batches = total_sample // batch_size
-            if total_sample % batch_size > 0:
-                batches+=1
             for batch in range(batches):
                 section = slice(batch*batch_size, (batch+1)*batch_size)
                 y_data_onehot = to_categorical(y_data[section], len(self.rsc.vocab_out.dic))
@@ -410,44 +435,51 @@ class Trainer:
         self.sum_wrt.add_scalar('learning-rate', self.cfg.learning_rate, self.cfg.epoch)
         return is_best
 
-    def _is_best(self) -> bool:
-        """
-        이번 epoch에 가장 좋은 성능을 냈는 지 확인하고 그럴 경우 현재 상태를 저장한다.
-        Returns:
-            마지막 f-score의 best 여부
-        """
-        if len(self.f_scores) > 1 and max(self.f_scores[:-1]) >= self.f_scores[-1]:
-            return False
-        # this epoch hits new max value
-        self.cfg.best_epoch = self.cfg.epoch
-        self.model.save('{}/model.state'.format(self.cfg.out_dir))
-        self._save_optim('{}/optim.state'.format(self.cfg.out_dir))
-        with open('{}/config.json'.format(self.cfg.out_dir), 'w', encoding='UTF-8') as fout:
-            json.dump(vars(self.cfg), fout, indent=2, sort_keys=True)
-        return True
 
-    def _save_optim(self, path: str):
-        """
-        save optimizer parameters
-        Args:
-            path:  path
-        """
-        torch.save(self.optimizer.state_dict(), path)
+    def _load_model(self, path):
+        print("path", path)
+        self.model.load_weights(path)
+        print('model loaded!')
 
-    def _load_optim(self, path: str, learning_rate: float):
-        """
-        load optimizer parameters
-        Args:
-            path:  path
-            learning_rate:  learning rate
-        """
-        if torch.cuda.is_available():
-            state_dict = torch.load(path)
-        else:
-            state_dict = torch.load(path, map_location=lambda storage, loc: storage)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), learning_rate)
-        self.optimizer.load_state_dict(state_dict)
-        self.optimizer.param_groups[0]['lr'] = learning_rate
+#    def _is_best(self) -> bool:
+#        """
+#        이번 epoch에 가장 좋은 성능을 냈는 지 확인하고 그럴 경우 현재 상태를 저장한다.
+#        Returns:
+#            마지막 f-score의 best 여부
+#        """
+#        if len(self.f_scores) > 1 and max(self.f_scores[:-1]) >= self.f_scores[-1]:
+#            return False
+#        # this epoch hits new max value
+#        self.cfg.best_epoch = self.cfg.epoch
+#        self.model.save('{}/model.state'.format(self.cfg.out_dir))
+#        self._save_optim('{}/optim.state'.format(self.cfg.out_dir))
+#        with open('{}/config.json'.format(self.cfg.out_dir), 'w', encoding='UTF-8') as fout:
+#            json.dump(vars(self.cfg), fout, indent=2, sort_keys=True)
+#        return True
+
+#    def _save_optim(self, path: str):
+#        """
+#        save optimizer parameters
+#        Args:
+#            path:  path
+#        """
+#        torch.save(self.optimizer.state_dict(), path)
+
+
+#    def _load_optim(self, path: str, learning_rate: float):
+#        """
+#        load optimizer parameters
+#        Args:
+#            path:  path
+#            learning_rate:  learning rate
+#        """
+#        if torch.cuda.is_available():
+#            state_dict = torch.load(path)
+#        else:
+#            state_dict = torch.load(path, map_location=lambda storage, loc: storage)
+#        self.optimizer = torch.optim.Adam(self.model.parameters(), learning_rate)
+#        self.optimizer.load_state_dict(state_dict)
+#        self.optimizer.param_groups[0]['lr'] = learning_rate
 
 #    def evaluate(self, is_dev: bool) -> tuple[float, float, float, float]:
 #        """

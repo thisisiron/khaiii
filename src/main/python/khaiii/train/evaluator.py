@@ -52,6 +52,8 @@ class Evaluator:
             predict_sent:  예측한 문장
         """
         assert len(correct_sent.words) == len(predict_sent.words)
+        print([x.res_tags for x in correct_sent.pos_tagged_words])
+        print([y.res_tags for y in predict_sent.pos_tagged_words])
         for gold, pred in zip(correct_sent.pos_tagged_words, predict_sent.pos_tagged_words):
             self.cnt['total_chars'] += len(gold.res_tags)
             self.cnt['match_chars'] += len([1 for x, y in zip(gold.res_tags, pred.res_tags)

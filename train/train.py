@@ -45,6 +45,7 @@ def main():
                         metavar='DIR', default='../rsc/src')
     parser.add_argument('--logdir', help='tensorboard log dir <default: ./logdir>', metavar='DIR',
                         default='./logdir')
+
     parser.add_argument('--window', help='left/right character window length <default: 3>',
                         metavar='INT', type=int, default=3)
     parser.add_argument('--spc-dropout', help='space(word delimiter) dropout rate <default: 0.0>',
@@ -60,9 +61,15 @@ def main():
                         default=500)
     parser.add_argument('--patience', help='maximum patience count to revert model <default: 10>',
                         metavar='INT', type=int, default=10)
+
     parser.add_argument('--gpu-num', help='GPU number to use <default: 0>', metavar='INT', type=int,
                         default=0)
     parser.add_argument('--debug', help='enable debug', action='store_true')
+    parser.add_argument('--mode', help='train or test', type=str, default='train')
+
+    parser.add_argument('--model-path', help='pre-trained model path', type=str,
+                        metavar='DIR', default='../src/main/python/khaiii/train/weights/weights-01-4.3965.h5')
+
     args = parser.parse_args()
 
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_num)
