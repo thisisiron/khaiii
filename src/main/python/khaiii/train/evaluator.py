@@ -68,6 +68,8 @@ class Evaluator:
             pred:  predicted word
         """
         self.cnt['total_words'] += 1
+        print(gold.res_tags)
+        print(pred.res_tags)
         gold_morphs = gold.pos_tagged_morphs
         pred_morphs = pred.pos_tagged_morphs
         if gold == pred:

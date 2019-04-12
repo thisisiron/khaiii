@@ -51,14 +51,14 @@ def main():
     parser.add_argument('--spc-dropout', help='space(word delimiter) dropout rate <default: 0.0>',
                         metavar='REAL', type=float, default=0.0)
     parser.add_argument('--cutoff', help='cutoff <default: 2>', metavar='INT', type=int, default=2)
-    parser.add_argument('--embed-dim', help='embedding dimension <default: 30>', metavar='INT',
-                        type=int, default=30)
+    parser.add_argument('--embed-dim', help='embedding dimension <default: 128>', metavar='INT',
+                        type=int, default=128)
     parser.add_argument('--learning-rate', help='learning rate <default: 0.001>', metavar='REAL',
                         type=float, default=0.001)
     parser.add_argument('--lr-decay', help='learning rate decay <default: 0.9>', metavar='REAL',
                         type=float, default=0.9)
     parser.add_argument('--batch-size', help='batch size <default: 500>', metavar='INT', type=int,
-                        default=500)
+                        default=300)
     parser.add_argument('--patience', help='maximum patience count to revert model <default: 10>',
                         metavar='INT', type=int, default=10)
 

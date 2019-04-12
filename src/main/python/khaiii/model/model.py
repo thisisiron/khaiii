@@ -90,7 +90,9 @@ def model(cfg, rsc):
     embedder = Embedder(embedding_size, input_length, vocab_size)
     x = embedder(inputs)
     x = Bidirectional(LSTM(256, return_sequences=True))(x)
+    x = Dropout(0.5)(x)
     x = Bidirectional(LSTM(256, return_sequences=True))(x)
+    x = Dropout(0.5)(x)
     outputs = TimeDistributed(Dense(num_of_classes, activation='softmax'))(x)
-
+    
     return Model(inputs=inputs, outputs=outputs)

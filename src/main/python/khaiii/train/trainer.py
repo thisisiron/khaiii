@@ -29,9 +29,6 @@ from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 
 
 from tensorboardX import SummaryWriter
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import tqdm
 
 from khaiii.train.dataset import PosDataset
@@ -61,15 +58,13 @@ class Trainer:
         setattr(cfg, 'input_length', 64)
         setattr(cfg, 'embedding_size', 128)
         self.rsc = Resource(cfg)
-        #self.model = CnnModel(cfg, self.rsc)
-        self.model = model(self.cfg, self.rsc)
-        if os.path.isfile(cfg.model_path) and cfg.mode=='test': 
-            self._load_model(cfg.model_path)
 
-        #self.optimizer = torch.optim.Adam(self.model.parameters(), cfg.learning_rate)
-        self.criterion = nn.CrossEntropyLoss()
+        self.model = model(self.cfg, self.rsc)
+        if os.path.isfile(cfg.model_path) and (cfg.mode=='test' or cfg.mode=='realtime'): 
+            self._load_model(cfg.model_path)
+        
         self.evaler = Evaluator()
-        self._load_dataset()
+        self._load_dataset(cfg.mode)
         if 'epoch' not in cfg.__dict__:
             setattr(cfg, 'epoch', 0)
             setattr(cfg, 'best_epoch', 0)
@@ -103,21 +98,23 @@ class Trainer:
         ]
         return '.'.join(model_cfgs)
 
-    def _load_dataset(self):
+    def _load_dataset(self, mode):
         """
         load training dataset
         """
-        # self.cfg.in_pfx: corpus
-        dataset_dev_path = '{}.dev'.format(self.cfg.in_pfx)
-        self.dataset_dev = PosDataset(self.cfg, self.rsc.restore_dic,
-                                      open(dataset_dev_path, 'r', encoding='UTF-8'))
-        dataset_test_path = '{}.test'.format(self.cfg.in_pfx)
-        self.dataset_test = PosDataset(self.cfg, self.rsc.restore_dic,
-                                       open(dataset_test_path, 'r', encoding='UTF-8'))
-        # train -> dev로 잠시 변경
-        dataset_train_path = '{}.dev'.format(self.cfg.in_pfx)
-        self.dataset_train = PosDataset(self.cfg, self.rsc.restore_dic,
-                                        open(dataset_train_path, 'r', encoding='UTF-8'))
+        if mode=='train':
+            # self.cfg.in_pfx: corpus
+            dataset_dev_path = '{}.dev'.format(self.cfg.in_pfx)
+            self.dataset_dev = PosDataset(self.cfg, self.rsc.restore_dic,
+                                          open(dataset_dev_path, 'r', encoding='UTF-8'))
+            # train -> dev로 잠시 변경
+            dataset_train_path = '{}.train'.format(self.cfg.in_pfx)
+            self.dataset_train = PosDataset(self.cfg, self.rsc.restore_dic,
+                                            open(dataset_train_path, 'r', encoding='UTF-8'))
+        elif mode=='test':
+            dataset_test_path = '{}.test'.format(self.cfg.in_pfx)
+            self.dataset_test = PosDataset(self.cfg, self.rsc.restore_dic,
+                                           open(dataset_test_path, 'r', encoding='UTF-8'))
 
     @classmethod
     def _dt_str(cls, dt_obj: datetime) -> str:
@@ -230,8 +227,77 @@ class Trainer:
         train_begin = datetime.now()
         logging.info('{{{{ training begin: %s {{{{', self._dt_str(train_begin))
 
-        self._train_epoch()
+        if self.cfg.mode == 'train':
+            print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev))
+            
+            STEP_SIZE_TRAIN = len(self.dataset_train.sents)//self.cfg.batch_size
+            STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//self.cfg.batch_size 
+            
+            gen = self.dataGenerator(self.cfg.batch_size, mode='train') 
+            val_gen = self.dataGenerator(self.cfg.batch_size, mode='dev')
 
+            self._set_callback_fn() # set callback function
+
+            self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+            self.model.summary()
+
+            self.model.fit_generator(gen, 
+                                        steps_per_epoch= STEP_SIZE_TRAIN, 
+                                        epochs=100,
+                                        validation_data = val_gen,
+                                        validation_steps = STEP_SIZE_VALIDATION,
+                                        verbose=1, 
+                                        callbacks=self.callbacks_list
+                                       )
+
+
+        elif self.cfg.mode == 'test':
+            print('test set size:', len(self.dataset_test))
+            test_gen = self.dataGenerator(100, mode='test')
+
+            for sent in tqdm(self.dataset_test):
+                test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
+                output = self.model.predict(np.array([test_contexts_tensor]))
+                predicts = np.argmax(output, axis=-1)
+                predicts = np.squeeze(predicts, axis=0)
+                pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts if val!=0]
+                pred_sent = copy.deepcopy(sent)
+                print(pred_sent.words)
+                pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
+                self.evaler.count(sent, pred_sent)
+
+            print(self.evaler.evaluate())
+
+        elif self.cfg.mode == 'realtime':
+
+
+            import tensorflow as tf
+            from tensorflow.keras.preprocessing.text import Tokenizer
+            from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+            token_in = Tokenizer(num_words=len(self.rsc.vocab_in.dic)+1,filters='')
+            token_in.word_index = self.rsc.vocab_in.dic
+            texts = [] 
+            texts.append('<cls>') 
+            for char in ' '.join(['오늘 날씨 겁나 구려']):
+                if char in self.rsc.vocab_in.dic:
+                    texts.append(char)
+                elif char==' ':
+                    texts.append('<w>')
+                else:
+                    texts.append('<u>')
+            texts.append('<sep>')
+            print('texts:', texts)
+            texts = token_in.texts_to_sequences([' '.join(texts)]) 
+            pad_texts = pad_sequences(texts, maxlen=self.cfg.input_length, padding='post')
+            example_data = np.array([pad_texts[0]])
+            print(example_data)
+            output = self.model.predict(example_data)
+            predicts = np.argmax(output, axis=-1)
+            predicts = np.squeeze(predicts, axis=0)
+            pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts if val!=0]
+            tags = [x.split(':', 1)[0] for x in pred_tags]
+            print(tags)
 
 
 #    def _revert_to_best(self, is_decay_lr: bool):
@@ -293,8 +359,11 @@ class Trainer:
 #        return is_best
 
     def _set_callback_fn(self):
+        """Set callback functions
+        """
 
-        MODEL_SAVE_FOLDER_PATH = '../src/main/python/khaiii/train/weights/'
+        train_begin  = datetime.now()
+        MODEL_SAVE_FOLDER_PATH = '../src/main/python/khaiii/train/weights/' + train_begin.strftime('%m%d%H%M%S') + "/"
         if not os.path.exists(MODEL_SAVE_FOLDER_PATH):
               os.mkdir(MODEL_SAVE_FOLDER_PATH)
 
@@ -303,53 +372,6 @@ class Trainer:
         cb_early_stopping = EarlyStopping(monitor='loss', patience=1) 
 
         self.callbacks_list = [cb_early_stopping,checkpoint]
-
-
-    def _train_epoch(self) -> bool:
-
-        if self.cfg.mode == 'train':
-            print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev))
-            
-            STEP_SIZE_TRAIN = len(self.dataset_train.sents)//self.cfg.batch_size
-            STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//self.cfg.batch_size 
-            
-            gen = self.dataGenerator(self.cfg.batch_size, mode='train') 
-            val_gen = self.dataGenerator(self.cfg.batch_size, mode='dev')
-
-            self._set_callback_fn()
-
-            self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            self.model.summary()
-
-
-
-            self.model.fit_generator(gen, 
-                                        steps_per_epoch= STEP_SIZE_TRAIN, 
-                                        epochs=100,
-                                        validation_data = val_gen,
-                                        validation_steps = STEP_SIZE_VALIDATION,
-                                        verbose=1, 
-                                        callbacks=self.callbacks_list
-                                       )
-
-
-        elif self.cfg.mode == 'test':
-            print('test set size:', len(self.dataset_test))
-            test_gen = self.dataGenerator(100, mode='test')
-
-            for sent in tqdm(self.dataset_test):
-                test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
-                output = self.model.predict(np.array([test_contexts_tensor]))
-                predicts = np.argmax(output, axis=-1)
-                predicts = np.squeeze(predicts, axis=0)
-                pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts if val!=0]
-                pred_sent = copy.deepcopy(sent)
-                print(pred_sent.words)
-                pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
-                self.evaler.count(sent, pred_sent)
-
-            print(self.evaler.evaluate())
-
 
     def _prepare_data(self, mode='train'):
         if mode=='train':
@@ -437,7 +459,6 @@ class Trainer:
 
 
     def _load_model(self, path):
-        print("path", path)
         self.model.load_weights(path)
         print('model loaded!')
 
@@ -513,28 +534,5 @@ class Trainer:
 #            self.evaler.count(sent, pred_sent)
 #        avg_loss = sum(losses) / len(losses)
 #        return (avg_loss, ) + self.evaler.evaluate()
-
-
-    def evaluate(self, is_dev: bool) -> Tuple[float, float, float, float]:
-        """
-        evaluate f-score
-        Args:
-            is_dev:  whether evaluate on dev set or not
-        Returns:
-            average dev loss
-            character accuracy
-            word accuracy
-            f-score
-        """
-        if is_dev:
-            mode = 'dev'
-        else: 
-            mode = 'test'
-        batch_size = 128
-        gen = self.dataGenerator(batch_size, mode) 
-        score = self.nn_model.evaluate_generator(gen, steps=len(self.dataset_dev.sents)//batch_size, verbose=1)
-        print('score:', score)
-        print('output:', self.nn_model.outputs)
-        
 
 
