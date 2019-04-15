@@ -4,6 +4,9 @@ __pycache__/
 
 train/corpus*
 train/*
+<<<<<<< HEAD
+=======
 
 *.swp
 *.h5
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86

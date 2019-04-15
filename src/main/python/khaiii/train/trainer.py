@@ -22,10 +22,14 @@ import pprint
 from typing import List, Tuple
 import numpy as np
 
+<<<<<<< HEAD
+from tensorflow.keras import backend as K
+=======
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import backend as K
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
 
 
 from tensorboardX import SummaryWriter
@@ -102,6 +106,19 @@ class Trainer:
         """
         load training dataset
         """
+<<<<<<< HEAD
+        # self.cfg.in_pfx: corpus
+        dataset_dev_path = '{}.dev'.format(self.cfg.in_pfx)
+        self.dataset_dev = PosDataset(self.cfg, self.rsc.restore_dic,
+                                      open(dataset_dev_path, 'r', encoding='UTF-8'))
+        dataset_test_path = '{}.test'.format(self.cfg.in_pfx)
+        self.dataset_test = PosDataset(self.cfg, self.rsc.restore_dic,
+                                       open(dataset_test_path, 'r', encoding='UTF-8'))
+        # train -> dev로 잠시 변경
+        dataset_train_path = '{}.dev'.format(self.cfg.in_pfx)
+        self.dataset_train = PosDataset(self.cfg, self.rsc.restore_dic,
+                                        open(dataset_train_path, 'r', encoding='UTF-8'))
+=======
         if mode=='train':
             # self.cfg.in_pfx: corpus
             dataset_dev_path = '{}.dev'.format(self.cfg.in_pfx)
@@ -115,6 +132,7 @@ class Trainer:
             dataset_test_path = '{}.test'.format(self.cfg.in_pfx)
             self.dataset_test = PosDataset(self.cfg, self.rsc.restore_dic,
                                            open(dataset_test_path, 'r', encoding='UTF-8'))
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
 
     @classmethod
     def _dt_str(cls, dt_obj: datetime) -> str:
@@ -226,6 +244,24 @@ class Trainer:
 
         train_begin = datetime.now()
         logging.info('{{{{ training begin: %s {{{{', self._dt_str(train_begin))
+<<<<<<< HEAD
+
+        is_best = self._train_epoch()
+
+
+
+    def _revert_to_best(self, is_decay_lr: bool):
+        """
+        이전 best 모델로 되돌린다.
+        Args:
+            is_decay_lr:  whether multiply decay factor or not
+        """
+        self.model.load('{}/model.state'.format(self.cfg.out_dir))
+        if is_decay_lr:
+            self.cfg.learning_rate *= self.cfg.lr_decay
+        self._load_optim('{}/optim.state'.format(self.cfg.out_dir), self.cfg.learning_rate)
+
+=======
 
         if self.cfg.mode == 'train':
             print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev))
@@ -311,6 +347,7 @@ class Trainer:
 #            self.cfg.learning_rate *= self.cfg.lr_decay
 #        self._load_optim('{}/optim.state'.format(self.cfg.out_dir), self.cfg.learning_rate)
 
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
 #    def _train_epoch(self) -> bool:
 #        """
 #        한 epoch을 학습한다. 배치 단위는 글자 단위
@@ -358,6 +395,63 @@ class Trainer:
 #        self.cfg.epoch += 1
 #        return is_best
 
+<<<<<<< HEAD
+
+    def _train_epoch(self) -> bool:
+        """
+        한 epoch을 학습한다. 배치 단위는 글자 단위
+        Returns:
+            현재 epoch이 best 성능을 나타냈는 지 여부
+        """
+        batch_size = 100
+        STEP_SIZE_TRAIN = len(self.dataset_train.sents)//batch_size
+        STEP_SIZE_VALIDATION = len(self.dataset_dev.sents)//batch_size 
+        self.nn_model = model(self.cfg, self.rsc)
+
+        gen = self.dataGenerator(batch_size) 
+        val_gen = self.dataGenerator(batch_size, mode='dev')
+        test_gen = self.dataGenerator(100,mode='test')
+
+        print('train:', len(self.dataset_train), ' dev:', len(self.dataset_dev), ' test:', len(self.dataset_test))
+
+        self.nn_model.fit_generator(gen, 
+                                    steps_per_epoch= STEP_SIZE_TRAIN, 
+                                    epochs=3, 
+                                    verbose=1, 
+                                    validation_data = val_gen,
+                                    validation_steps = STEP_SIZE_VALIDATION
+                                   )
+        
+
+#        output = self.nn_model.predict_generator(test_gen,
+#                                        steps=50,
+#                                        verbose=1
+#                                       )
+#        for x,z in zip(np.argmax(output, axis=-1), self.dataset_test.sents):
+#            print(z)
+#            for y in x:
+#                print(self.rsc.vocab_out[int(y)], end=' ')
+#            print()
+
+        for sent in tqdm(self.dataset_test):
+            test_labels_tensor, test_contexts_tensor = sent._pad_sequence(self.cfg, self.rsc)
+            output = self.nn_model.predict(np.array([test_contexts_tensor]))
+            predicts = np.argmax(output, axis=-1)
+            predicts = np.squeeze(predicts, axis=0)
+            pred_tags = [self.rsc.vocab_out[int(val)] for val in predicts]
+            pred_sent = copy.deepcopy(sent)
+            #print(pred_tags)
+            print(pred_sent.texts)
+            pred_sent.set_pos_result(pred_tags, self.rsc.restore_dic)
+            self.evaler.count(sent, pred_sent)
+
+        print(self.evaler.evaluate())
+
+
+
+        is_best = 5
+        return is_best
+=======
     def _set_callback_fn(self):
         """Set callback functions
         """
@@ -417,6 +511,37 @@ class Trainer:
                 y_data_onehot = to_categorical(y_data[section], len(self.rsc.vocab_out.dic))
                 yield(x_data[section], y_data_onehot)
 
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
+
+    def _prepare_train_data(self, mode='train'):
+        if mode=='train':
+            dataset = self.dataset_train
+        elif mode=='dev':
+            dataset = self.dataset_dev
+        elif mode=='test':
+            dataset = self.dataset_test
+
+        labels_bundle = []
+        contexts_bundle = []
+        for train_sent in tqdm(dataset):
+            labels_tensor, contexts_tensor = train_sent._pad_sequence(self.cfg, self.rsc)
+            labels_bundle.append(labels_tensor)
+            contexts_bundle.append(contexts_tensor)
+        return np.array(labels_bundle), np.array(contexts_bundle)
+
+
+    def dataGenerator(self, batch_size=128, mode='train'):
+        y_data, x_data = self._prepare_train_data(mode)
+        while True:
+            total_sample = x_data.shape[0]
+            batches = total_sample // batch_size
+            if total_sample % batch_size > 0:
+                batches+=1
+            for batch in range(batches):
+                section = slice(batch*batch_size, (batch+1)*batch_size)
+                y_data_onehot = to_categorical(y_data[section], len(self.rsc.vocab_out.dic))
+                yield(x_data[section], y_data_onehot)
+
 
     def _check_epoch(self, loss_trains: List[float], avg_loss_dev: float, acc_char: float,
                      acc_word: float, f_score: float) -> bool:
@@ -458,6 +583,22 @@ class Trainer:
         return is_best
 
 
+<<<<<<< HEAD
+    def _load_optim(self, path: str, learning_rate: float):
+        """
+        load optimizer parameters
+        Args:
+            path:  path
+            learning_rate:  learning rate
+        """
+        if torch.cuda.is_available():
+            state_dict = torch.load(path)
+        else:
+            state_dict = torch.load(path, map_location=lambda storage, loc: storage)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), learning_rate)
+        self.optimizer.load_state_dict(state_dict)
+        self.optimizer.param_groups[0]['lr'] = learning_rate
+=======
     def _load_model(self, path):
         self.model.load_weights(path)
         print('model loaded!')
@@ -501,6 +642,7 @@ class Trainer:
 #        self.optimizer = torch.optim.Adam(self.model.parameters(), learning_rate)
 #        self.optimizer.load_state_dict(state_dict)
 #        self.optimizer.param_groups[0]['lr'] = learning_rate
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
 
 #    def evaluate(self, is_dev: bool) -> tuple[float, float, float, float]:
 #        """
@@ -536,3 +678,29 @@ class Trainer:
 #        return (avg_loss, ) + self.evaler.evaluate()
 
 
+<<<<<<< HEAD
+    def evaluate(self, is_dev: bool) -> Tuple[float, float, float, float]:
+        """
+        evaluate f-score
+        Args:
+            is_dev:  whether evaluate on dev set or not
+        Returns:
+            average dev loss
+            character accuracy
+            word accuracy
+            f-score
+        """
+        if is_dev:
+            mode = 'dev'
+        else: 
+            mode = 'test'
+        batch_size = 128
+        gen = self.dataGenerator(batch_size, mode) 
+        score = self.nn_model.evaluate_generator(gen, steps=len(self.dataset_dev.sents)//batch_size, verbose=1)
+        print('score:', score)
+        print('output:', self.nn_model.outputs)
+        
+
+
+=======
+>>>>>>> b7b3300e638d76daddc71e13bd70d13b7dd8dc86
